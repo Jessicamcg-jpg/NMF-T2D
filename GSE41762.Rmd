@@ -1,0 +1,244 @@
+---
+title: "GSE50397"
+author: "Jessica McGreevy"
+date: "2025-06-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(GEOquery)
+library(Biobase)
+library(mclust)
+library(clue)
+library(pdfCluster)
+library(NMF)
+library(funtimes)
+library(ggplot2)
+library(plotrix)
+library(fpc)
+library(cluster)
+library(mclust)
+library(aricode)
+library(dplyr)
+library(corrplot)
+```
+
+ 
+
+```{r}
+gse <- getGEO("GSE41762" , GSEMatrix = TRUE) 
+ 
+length(gse) 
+gse_data <- gse[[1]]
+
+# 1. Expression matrix 
+exprSet7 <- exprs(gse_data)
+head(exprSet7[, 1:5])
+dim(exprSet7)
+# 2. Sample metadata 
+sample_metaGSE41762 <- pData(gse_data)
+head(sample_metaGSE41762)
+
+# 3. Gene annotations 
+gene_infoGSE41762 <- fData(gse_data)
+head(gene_infoGSE41762)
+write.csv(sample_metaGSE41762, file = "sample_metaGSE41762.csv", row.names = TRUE)
+
+```
+```{r}
+
+sample_meta2GSE41762 <- read.csv("C:\\Users\\lilly\\Documents\\sample_meta2GSE41762.csv",
+                                 header = TRUE,
+                                 stringsAsFactors = FALSE,
+                                 row.names = 1)  # if first column has sample IDs
+
+# Check the dimensions
+dim(sample_meta2GSE41762)
+head(sample_meta2GSE41762)
+exprSet7_clean <- exprSet7[, rownames(sample_meta2GSE41762)]
+gene_infoGSE41762_clean <- gene_infoGSE41762[rownames(exprSet7_clean), , drop = FALSE]
+dim(exprSet7_clean)
+ 
+pheno <- AnnotatedDataFrame(sample_meta2GSE41762)
+feature <- AnnotatedDataFrame(gene_infoGSE41762_clean)
+ dim(exprSet7_clean)                  
+dim(sample_meta241762)          
+all(colnames(exprSet7_clean) == rownames(sample_meta2GSE41762))
+eset <- ExpressionSet(assayData = exprSet7_clean,
+                      phenoData = pheno,
+                      featureData = feature)
+
+
+dim(eset)  
+keep_genes <- rowSums(exprSet7_clean >= 7) >= round(0.2 * ncol(exprSet7_clean))
+
+# Step 2: Filter the matrix
+filtered_counts <- exprSet7_clean[keep_genes, ]
+dim(filtered_counts)
+log_filtered <- log2(filtered_counts + 1)  
+
+gene_vars <- apply(log_filtered, 1, var) # calculates variances
+top_genes <- names(sort(gene_vars, decreasing = TRUE))[1:10000]
+final_filtered <- filtered_counts[top_genes, ]
+ 
+filtered_feature <- gene_infoGSE41762_clean[rownames(final_filtered), , drop = FALSE]
+filtered_features <- filtered_feature[rownames(final_filtered), , drop = FALSE]
+
+filtered_phenos <- sample_metaGSE41762[colnames(final_filtered), , drop = FALSE]
+
+pheno <- AnnotatedDataFrame(filtered_phenos)
+feature <- AnnotatedDataFrame(filtered_features)
+
+eset_filtered <- ExpressionSet(
+  assayData = final_filtered,
+  phenoData = pheno,
+  featureData = feature
+)
+```
+
+
+```{r}
+non_diabetic_samples <- filtered_phenos$`characteristics_ch1.5` == "status: Non-diabetic donor"
+diabetic_samples <- filtered_phenos$`characteristics_ch1.5` == "status: Diabetic donor"
+
+expr_non_diabetic <- final_filtered[, non_diabetic_samples]
+expr_diabetic <-  final_filtered[, diabetic_samples]
+log_nd <- log2(expr_non_diabetic + 1)
+log_d <- log2(expr_diabetic + 1)
+ 
+library(NMF)
+nmf.options(parallel = FALSE)
+
+estim_nd <- nmf(log_nd, rank = 2:6, nrun = 100, method = "brunet", seed = 123)
+plot(estim_nd)
+
+estim_d <- nmf(log_d , rank = 2:6, nrun = 100, method = "brunet", seed = 123)
+plot(estim_d) 
+ estim_d
+ samples_nd <- colnames(log_nd )
+annCol <- data.frame(t2dmknown = rep( "0", length(samples_nd)))
+rownames(annCol) <- samples_nd
+
+ #Plot consensus 
+consensusmap(estim_nd, annCol = annCol, labCol = NA, labRow = NA)
+
+samples_d <- colnames(log_d )
+annCol <- data.frame(t2dmknown = rep( "1", length(samples_d)))
+rownames(annCol) <- samples_d
+
+# Plot consensus 
+consensusmap(estim_d, annCol = annCol, labCol = NA, labRow = NA)
+```
+```{r}
+best_k2_model <- nmf(log_d, rank = 2, nrun = 30, method = "brunet", seed = 123)
+
+# Extract basis and coef matrices
+W <- basis(best_k2_model)
+H <- coef(best_k2_model)
+
+dim(W)  # genes x 2
+dim(H)
+
+top_genes_per_cluster <- apply(W, 2, function(x) {
+  names(sort(x, decreasing = TRUE)[1:20])
+})
+ 
+top_genes_cluster1 <- rownames(W)[order(W[,1], decreasing = TRUE)][1:20]
+
+top_genes_cluster1
+top_genes_cluster2 <- rownames(W)[order(W[,2], decreasing = TRUE)][1:20]
+
+top_genes_cluster2
+ 
+combined_top_genes <- unique(unlist(top_genes_per_cluster))
+expr_subset <- log_d[combined_top_genes, ]
+library(NMF)
+ 
+aheatmap(expr_subset, scale = "row")
+
+geo_accessions_in_heatmap <- colnames(expr_subset)
+print(geo_accessions_in_heatmap)
+ 
+matches <- match(geo_accessions_in_heatmap, rownames(filtered_phenos))
+valid_idx <- which(!is.na(matches))
+
+Heatmap_metadata <- filtered_phenos[matches[valid_idx], ]
+expr_subset <- expr_subset[, valid_idx]
+
+length(combined_top_genes)
+sum(combined_top_genes %in% rownames(log_d))
+head(rownames(log_d), 10)
+
+# Save to CSV
+write.csv(Heatmap_metadata,
+          file = "heatmap_sample8_metadata.csv")
+```
+
+```{r}
+Heatmap_metadata <- read.csv("heatmap_sample8_metadata.csv", row.names=1)
+
+H <-  coef(best_k2_model)
+subtype_labels<- apply(H, 2, which.max)
+Heatmap_metadata$subtype <- as.factor(subtype_labels)
+sample_names <- colnames(H)
+Heatmap_metadata$geo_accession <- rownames(Heatmap_metadata)
+ 
+summary_table <- Heatmap_metadata %>%
+  group_by(subtype) %>%
+  summarise(
+    n = n(),
+    age_mean = mean(age.ch1, na.rm = TRUE),
+    age_sd = sd(age.ch1, na.rm = TRUE),
+    bmi_mean = mean(bmi.ch1, na.rm = TRUE),
+    bmi_sd = sd(bmi.ch1, na.rm = TRUE),
+    hba1c_mean = mean(hba1c.ch1, na.rm = TRUE),
+    hba1c_sd = sd(hba1c.ch1, na.rm = TRUE)
+  )
+print(summary_table)
+summary(aov(age.ch1 ~ subtype, data= Heatmap_metadata))
+summary(aov(bmi.ch1 ~ subtype, data= Heatmap_metadata))
+summary(aov(hba1c.ch1~ subtype, data= Heatmap_metadata))
+```
+
+```{r}
+table(subtype_labels)
+
+library(broom)
+
+meta_vars <- Heatmap_metadata %>% 
+  select(where(is.numeric)) %>% 
+  names()
+
+results <- lapply(meta_vars, function(var) {
+  formula <- as.formula(paste(var, "~ subtype"))
+  res <- aov(formula, data = Heatmap_metadata)
+  tidy(res)[1, c("term", "p.value")] %>% mutate(variable = var)
+})
+
+anova_results <- do.call(rbind, results) %>% 
+  arrange(p.value)
+
+print(anova_results)
+```
+
+```{r}
+library(writexl)
+
+ 
+subtype_list <- split(Heatmap_metadata, Heatmap_metadata$subtype)
+
+ 
+write_xlsx(subtype_list, "Heatmap_subtypes.xlsx")
+```
+ 
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
